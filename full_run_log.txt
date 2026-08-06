@@ -1,0 +1,132 @@
+=== Build config (FULL RUN) ===
+
+=== 1. Loading small sources + psychometric ===
+psychometric: (1000, 7), users with OCEAN features: 1000
+logon: (854859, 5) (after date filter)
+device: (405380, 5) (after date filter)
+file: (445581, 6) (after date filter)
+
+=== 2. Parsing small sources into activity records ===
+[schema] logon: parsed 854859 activity records
+[schema] device: parsed 405380 activity records
+[schema] file: parsed 445581 activity records
+Small-source activity records: 1705820
+
+=== 3. Aggregating small-source records (in-memory) ===
+Small-source aggregated edges: (492487, 36)
+
+=== 4. Streaming + aggregating large sources (http, email) ===
+
+-- http --
+[streaming] http: chunk 0 (500000 rows) -> 500000 events, running total 500000
+[streaming] http: chunk 1 (500000 rows) -> 500000 events, running total 1000000
+[streaming] http: chunk 2 (500000 rows) -> 500000 events, running total 1500000
+[streaming] http: chunk 3 (500000 rows) -> 500000 events, running total 2000000
+[streaming] http: chunk 4 (500000 rows) -> 500000 events, running total 2500000
+[streaming] http: chunk 5 (500000 rows) -> 500000 events, running total 3000000
+[streaming] http: chunk 6 (500000 rows) -> 500000 events, running total 3500000
+[streaming] http: chunk 7 (500000 rows) -> 500000 events, running total 4000000
+[streaming] http: chunk 8 (500000 rows) -> 500000 events, running total 4500000
+[streaming] http: chunk 9 (500000 rows) -> 500000 events, running total 5000000
+[streaming] http: chunk 10 (500000 rows) -> 500000 events, running total 5500000
+[streaming] http: chunk 11 (500000 rows) -> 500000 events, running total 6000000
+[streaming] http: chunk 12 (500000 rows) -> 500000 events, running total 6500000
+[streaming] http: chunk 13 (500000 rows) -> 500000 events, running total 7000000
+[streaming] http: chunk 14 (500000 rows) -> 500000 events, running total 7500000
+[streaming] http: chunk 15 (500000 rows) -> 500000 events, running total 8000000
+[streaming] http: chunk 16 (500000 rows) -> 500000 events, running total 8500000
+[streaming] http: chunk 17 (500000 rows) -> 500000 events, running total 9000000
+[streaming] http: chunk 18 (500000 rows) -> 500000 events, running total 9500000
+[streaming] http: chunk 19 (500000 rows) -> 500000 events, running total 10000000
+[streaming] http: chunk 20 (500000 rows) -> 500000 events, running total 10500000
+[streaming] http: chunk 21 (500000 rows) -> 500000 events, running total 11000000
+[streaming] http: chunk 22 (500000 rows) -> 500000 events, running total 11500000
+[streaming] http: chunk 23 (500000 rows) -> 500000 events, running total 12000000
+[streaming] http: chunk 24 (500000 rows) -> 500000 events, running total 12500000
+[streaming] http: chunk 25 (500000 rows) -> 500000 events, running total 13000000
+[streaming] http: chunk 26 (500000 rows) -> 500000 events, running total 13500000
+[streaming] http: chunk 27 (500000 rows) -> 500000 events, running total 14000000
+[streaming] http: chunk 28 (500000 rows) -> 500000 events, running total 14500000
+[streaming] http: chunk 29 (500000 rows) -> 500000 events, running total 15000000
+[streaming] http: chunk 30 (500000 rows) -> 500000 events, running total 15500000
+[streaming] http: chunk 31 (500000 rows) -> 500000 events, running total 16000000
+[streaming] http: chunk 32 (500000 rows) -> 500000 events, running total 16500000
+[streaming] http: chunk 33 (500000 rows) -> 500000 events, running total 17000000
+[streaming] http: chunk 34 (500000 rows) -> 500000 events, running total 17500000
+[streaming] http: chunk 35 (500000 rows) -> 500000 events, running total 18000000
+[streaming] http: chunk 36 (500000 rows) -> 500000 events, running total 18500000
+[streaming] http: chunk 37 (500000 rows) -> 500000 events, running total 19000000
+[streaming] http: chunk 38 (500000 rows) -> 500000 events, running total 19500000
+[streaming] http: chunk 39 (500000 rows) -> 500000 events, running total 20000000
+[streaming] http: chunk 40 (500000 rows) -> 500000 events, running total 20500000
+[streaming] http: chunk 41 (500000 rows) -> 500000 events, running total 21000000
+[streaming] http: chunk 42 (500000 rows) -> 500000 events, running total 21500000
+[streaming] http: chunk 43 (500000 rows) -> 500000 events, running total 22000000
+[streaming] http: chunk 44 (500000 rows) -> 500000 events, running total 22500000
+[streaming] http: chunk 45 (500000 rows) -> 500000 events, running total 23000000
+[streaming] http: chunk 46 (500000 rows) -> 500000 events, running total 23500000
+[streaming] http: chunk 47 (500000 rows) -> 500000 events, running total 24000000
+[streaming] http: chunk 48 (500000 rows) -> 500000 events, running total 24500000
+[streaming] http: chunk 49 (500000 rows) -> 500000 events, running total 25000000
+[streaming] http: chunk 50 (500000 rows) -> 500000 events, running total 25500000
+[streaming] http: chunk 51 (500000 rows) -> 500000 events, running total 26000000
+[streaming] http: chunk 52 (500000 rows) -> 500000 events, running total 26500000
+[streaming] http: chunk 53 (500000 rows) -> 500000 events, running total 27000000
+[streaming] http: chunk 54 (500000 rows) -> 500000 events, running total 27500000
+[streaming] http: chunk 55 (500000 rows) -> 500000 events, running total 28000000
+[streaming] http: chunk 56 (434423 rows) -> 434423 events, running total 28434423
+http: streamed 28434423 total events -> data/interim/http_events.csv
+http: aggregated to (9043275, 16)
+
+-- email --
+[streaming] email: chunk 0 (500000 rows) -> 1581461 events, running total 1581461
+[streaming] email: chunk 1 (500000 rows) -> 1568661 events, running total 3150122
+[streaming] email: chunk 2 (500000 rows) -> 1574212 events, running total 4724334
+[streaming] email: chunk 3 (500000 rows) -> 1581449 events, running total 6305783
+[streaming] email: chunk 4 (500000 rows) -> 1570993 events, running total 7876776
+[streaming] email: chunk 5 (129979 rows) -> 409593 events, running total 8286369
+email: streamed 8286369 total events -> data/interim/email_events.csv
+email: aggregated to (2059587, 36)
+
+=== 5. Combining all aggregated edges ===
+Total aggregated edges: (11595349, 61)
+Edge types: ['copies_file', 'logs_into', 'uses_device', 'visits_url', 'sends_email', 'uses_pc']
+Days covered: 501
+
+=== 6. Building daily heterogeneous graphs ===
+Built 501 daily graphs
+
+Example graph (2010-01-02):
+HeteroData(
+  user={ x=[1000, 5] },
+  pc={ x=[1003, 1] },
+  domain={ x=[484, 1] },
+  (user, copies_file, pc)={
+    edge_index=[2, 11],
+    edge_attr=[11, 22],
+  },
+  (user, logs_into, pc)={
+    edge_index=[2, 52],
+    edge_attr=[52, 22],
+  },
+  (user, uses_device, pc)={
+    edge_index=[2, 16],
+    edge_attr=[16, 22],
+  },
+  (user, visits_url, domain)={
+    edge_index=[2, 1177],
+    edge_attr=[1177, 11],
+  },
+  (user, sends_email, domain)={
+    edge_index=[2, 261],
+    edge_attr=[261, 31],
+  },
+  (user, uses_pc, pc)={
+    edge_index=[2, 46],
+    edge_attr=[46, 31],
+  }
+)
+
+=== 7. Saving ===
+Saved 501 graphs to output/daily_graphs.pkl
+Saved aggregated edge table to output/aggregated_edges.csv
