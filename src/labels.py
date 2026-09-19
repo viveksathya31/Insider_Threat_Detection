@@ -23,6 +23,17 @@ We only need (type, id, date, user) from each row:
   - (type, id) is the precise key for matching against a raw r4.2/*.csv event
     later (ids are unique only WITHIN a source file -- see project handoff).
   - (user, date) gives the (user, day) label directly, no id-matching needed.
+
+NOTE -- scenario 3 incidental-user exclusion (verified manually, see handoff doc):
+  Scenario 3 incident files each contain two identities: the user named in
+  insiders.csv (e.g. BSS0369), who has device/email/file/http/logon rows --
+  the real malicious footprint (keylogger download, suspicious .exe drop,
+  etc.) -- and a second user (FBA0348 or FAW0032, shared across all 10
+  scenario-3 files) who only ever appears on email/logon rows: an ordinary
+  coworker who emails with / shares a PC with the real insider, but never
+  performs any device/file/http action. Manually audited all 10 scenario-3
+  files (2025-09) to confirm this pattern holds with no exceptions. Excluding
+  them brings the malicious-user count to 70, matching insiders.csv exactly.
 """
 from pathlib import Path
 import csv
@@ -31,6 +42,9 @@ import pandas as pd
 ANSWERS_DIR = Path("data/raw/answers")
 INSIDERS_CSV = ANSWERS_DIR / "insiders.csv"
 RELEASE = "4.2"
+
+# Confirmed incidental (not malicious actors) -- see module docstring note above.
+INCIDENTAL_USERS = {"FBA0348", "FAW0032"}
 
 
 def _incident_file_path(scenario: str, details: str) -> Path:
@@ -68,6 +82,9 @@ def build_labels():
         ARE malicious; union against your full (user, day) grid, everything else = 0.
       malicious_event_ids: dict[source_type] -> set(event_id), for precise row-level
         matching later (edge attribution / explainability ground truth).
+
+    Rows belonging to INCIDENTAL_USERS are dropped before either output is built,
+    so neither the (user, day) labels nor the malicious_event_ids include them.
     """
     index = load_insiders_index()
     print(f"[labels] {len(index)} incident entries in dataset {RELEASE}, "
@@ -85,6 +102,14 @@ def build_labels():
         raise RuntimeError("No incident rows parsed -- check answers/ layout")
 
     ev_df = pd.DataFrame(all_rows)
+
+    n_before = len(ev_df)
+    ev_df = ev_df[~ev_df["user"].isin(INCIDENTAL_USERS)]
+    n_dropped = n_before - len(ev_df)
+    if n_dropped:
+        print(f"[labels] dropped {n_dropped} rows from incidental users "
+              f"{sorted(INCIDENTAL_USERS)}")
+
     malicious_event_ids = {
         st: set(group["event_id"]) for st, group in ev_df.groupby("source_type")
     }
