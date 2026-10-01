@@ -8,6 +8,8 @@ Usage:
 Small sources (logon, device, file, psychometric) are loaded directly into memory.
 Large sources (http, email) are streamed chunk-by-chunk to data/interim/*_events.csv
 via src/streaming.py, then aggregated off-disk via DuckDB (src/aggregator.py).
+LDAP monthly snapshots are parsed via src/ldap_features.py and passed through to
+graph_builder.py, which selects the right month's LDAP features per day.
 """
 import argparse
 import pickle
@@ -21,6 +23,7 @@ from src.parsers import (  # noqa: F401
 from src.aggregator import aggregate_edges, aggregate_events_file_duckdb
 from src.graph_builder import build_daily_graphs
 from src.streaming import parse_source_to_events_file
+from src.ldap_features import build_ldap_features
 
 RAW_DIR = Path("data/raw/r4.2")
 INTERIM_DIR = Path("data/interim")
@@ -47,10 +50,13 @@ def main(start=None, end=None):
     slice_note = f" (slice {start} to {end})" if (start or end) else " (FULL RUN)"
     print(f"=== Build config{slice_note} ===")
 
-    print("\n=== 1. Loading small sources + psychometric ===")
+    print("\n=== 1. Loading small sources + psychometric + LDAP ===")
     psych_raw = pd.read_csv(RAW_DIR / "psychometric.csv")
     psych_df = load_psychometric(psych_raw)
     print(f"psychometric: {psych_raw.shape}, users with OCEAN features: {len(psych_df)}")
+
+    ldap_df = build_ldap_features()
+    print(f"ldap: {ldap_df.shape}, months covered: {ldap_df['month'].nunique()}")
 
     small_frames = {}
     for name in SMALL_SOURCES:
@@ -89,14 +95,16 @@ def main(start=None, end=None):
     print(f"Edge types: {agg_df['edge_type'].unique().tolist()}")
     print(f"Days covered: {agg_df['day'].nunique()}")
 
-    print("\n=== 6. Building daily heterogeneous graphs ===")
-    graphs = build_daily_graphs(agg_df, psych_df)
+    print("\n=== 6. Building daily heterogeneous graphs (with LDAP features) ===")
+    graphs = build_daily_graphs(agg_df, psych_df, ldap_df)
     print(f"Built {len(graphs)} daily graphs")
 
     if graphs:
         first_day = next(iter(graphs))
         print(f"\nExample graph ({first_day.date()}):")
         print(graphs[first_day])
+        print(f"\nUser feature dim (should be 10: 5 OCEAN + 5 LDAP): "
+              f"{graphs[first_day]['user'].x.shape[1]}")
 
     print("\n=== 7. Saving ===")
     suffix = "_slice" if (start or end) else ""
