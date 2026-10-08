@@ -7,8 +7,6 @@ naive random split risks starving val/test of positive examples entirely.
 Split is by USER, not by day -- a user's full history stays in exactly one split,
 to avoid leaking their behavioral baseline across train/test.
 
-Usage:
-    python3 scripts/split_users.py
 """
 import json
 import random
