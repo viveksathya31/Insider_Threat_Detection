@@ -242,6 +242,52 @@ class InsiderThreatAE(nn.Module):
         return reconstruction, target, per_user_error
 
 
+class InsiderThreatOC(nn.Module):
+    """
+    HeteroGNNEncoder + OneClassHead (Deep SVDD).
+    Maps user embeddings into a latent hypersphere where normal activity is
+    clustered around a fixed center vector c.
+    
+    forward() returns (projected, anomaly_scores), where anomaly_scores is
+    the squared Euclidean distance ||phi(z) - c||^2 per user.
+    """
+
+    def __init__(self, node_in_dims: Dict[str, int], edge_attr_dims: Dict[EdgeType, int],
+                 hidden_dim: int = 64, projection_dim: int = 32, num_layers: int = 2):
+        super().__init__()
+        from models.heads import OneClassHead
+        self.encoder = HeteroGNNEncoder(node_in_dims, edge_attr_dims, hidden_dim, num_layers)
+        self.oc_head = OneClassHead(embedding_dim=hidden_dim, projection_dim=projection_dim, hidden_dim=hidden_dim)
+
+    def forward(self, data: HeteroData) -> Tuple[torch.Tensor, torch.Tensor]:
+        x_dict = self.encoder(data.x_dict, data.edge_index_dict, data.edge_attr_dict)
+        user_embedding = x_dict["user"]
+        projected, distances = self.oc_head(user_embedding)
+        return projected, distances
+
+
+class InsiderThreatCLF(nn.Module):
+    """
+    HeteroGNNEncoder + ClassificationHead (Supervised).
+    Trains with weighted BCEWithLogitsLoss to directly predict malicious probability.
+    
+    forward() returns logits of shape [n_users].
+    """
+
+    def __init__(self, node_in_dims: Dict[str, int], edge_attr_dims: Dict[EdgeType, int],
+                 hidden_dim: int = 64, num_layers: int = 2, dropout: float = 0.2):
+        super().__init__()
+        from models.heads import ClassificationHead
+        self.encoder = HeteroGNNEncoder(node_in_dims, edge_attr_dims, hidden_dim, num_layers)
+        self.clf_head = ClassificationHead(embedding_dim=hidden_dim, hidden_dim=hidden_dim // 2, dropout=dropout)
+
+    def forward(self, data: HeteroData) -> torch.Tensor:
+        x_dict = self.encoder(data.x_dict, data.edge_index_dict, data.edge_attr_dict)
+        user_embedding = x_dict["user"]
+        logits = self.clf_head(user_embedding)
+        return logits
+
+
 
 def load_user_split_masks(splits_path: str = "data/processed/user_splits.json",
                 user_ordering_csv: str = "data/raw/r4.2/psychometric.csv") -> Dict[str,
@@ -270,19 +316,73 @@ torch.Tensor]:
     masks = {}
     n_users = len(ordered_users)
     for split_name in ["train", "val", "test"]:
-        mask = torch.zeros(n_users, dtype = torch.bool)
+        mask = torch.zeros(n_users, dtype=torch.bool)
         for uid in splits[split_name]:
             if uid in user_to_idx:
                 mask[user_to_idx[uid]] = True
         masks[split_name] = mask
-    return masks    
-        
+    return masks
 
 
+def compute_train_edge_norm_stats(graphs: Dict, train_mask: torch.Tensor) -> Dict[EdgeType, Tuple[torch.Tensor, torch.Tensor]]:
+    """
+    Computes per-edge-type mean and std exclusively over edges originating from
+    train-split users across all days. Prevents data leakage into val/test.
+    """
+    sums, sq_sums, counts = {}, {}, {}
+    for g in graphs.values():
+        for et in g.edge_types:
+            if "edge_attr" not in g[et]:
+                continue
+            src = g[et].edge_index[0]
+            # Only consider edges originating from users in the train split
+            train_edges = train_mask[src]
+            if not train_edges.any():
+                continue
+            attrs = g[et].edge_attr[train_edges]
+            if et not in sums:
+                sums[et] = attrs.sum(dim=0)
+                sq_sums[et] = (attrs ** 2).sum(dim=0)
+                counts[et] = attrs.shape[0]
+            else:
+                sums[et] += attrs.sum(dim=0)
+                sq_sums[et] += (attrs ** 2).sum(dim=0)
+                counts[et] += attrs.shape[0]
+
+    stats = {}
+    for et in sums:
+        mean = sums[et] / counts[et]
+        var = (sq_sums[et] / counts[et]) - (mean ** 2)
+        std = var.clamp(min=1e-6).sqrt()
+        stats[et] = (mean, std)
+
+    return stats
 
 
+def apply_edge_norm(data: HeteroData, norm_stats: Dict[EdgeType, Tuple[torch.Tensor, torch.Tensor]]) -> HeteroData:
+    """
+    Applies z-score normalization (attr - mean) / std in-place to all edges.
+    Handles forward and reverse edges (which share the same base relation stats).
+    """
+    for et in data.edge_types:
+        if "edge_attr" not in data[et]:
+            continue
+        # Find matching stats (forward relation or reverse relation)
+        lookup_et = et
+        if et not in norm_stats:
+            # Handle reverse edge naming: ('pc', 'rev_logs_into', 'user') -> ('user', 'logs_into', 'pc')
+            src, rel, dst = et
+            if rel.startswith("rev_"):
+                fwd_rel = rel[4:]
+                lookup_et = (dst, fwd_rel, src)
 
+        if lookup_et in norm_stats:
+            mean, std = norm_stats[lookup_et]
+            mean = mean.to(device=data[et].edge_attr.device, dtype=data[et].edge_attr.dtype)
+            std = std.to(device=data[et].edge_attr.device, dtype=data[et].edge_attr.dtype)
+            data[et].edge_attr = (data[et].edge_attr - mean) / std
 
+    return data
 
 
 # =============================================================================
