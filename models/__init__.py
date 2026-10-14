@@ -16,7 +16,8 @@ from .nf_gnn import (
     InsiderThreatCLF,
 )
 
-from .temporal import TemporalAttention, TemporalGRU, CumulativeDriftDetector
+from .temporal import TemporalAttention, TemporalGRU, CumulativeDriftDetector, MultiScaleTemporalGRU
+from .losses import BinaryFocalLoss
 
 __all__ = [
     "FORWARD_EDGE_TYPES",
@@ -35,5 +36,7 @@ __all__ = [
     "InsiderThreatCLF",
     "TemporalAttention",
     "TemporalGRU",
+    "MultiScaleTemporalGRU",
     "CumulativeDriftDetector",
+    "BinaryFocalLoss",
 ]

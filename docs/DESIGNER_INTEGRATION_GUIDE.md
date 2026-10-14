@@ -2,8 +2,12 @@
 
 > **Project:** CYBER-GNN Forensic SOC Dashboard  
 > **Backend Architecture:** Heterogeneous Graph Neural Network + Sequential Attention GRU  
+> **Default Model:** 14-Day Sequential Temporal GRU + Focal Loss (Tactical Forensic Triage)  
+> **Optional Model:** 60-Day Multi-Scale Hierarchical GRU (3d/14d/60d Strategic Drift Surveillance)  
 > **Dataset:** CMU CERT Insider Threat Testbed (r4.2) | 1,000 Employees across 501 Days  
-> **Data File Location:** [`output/reports/soc_dashboard_data.json`](file:///Users/vivek/Projects/insider_gnn/output/reports/soc_dashboard_data.json)
+> **Data File Locations:**  
+> - 14-Day Default: [`output/reports/soc_dashboard_data.json`](file:///Users/vivek/Projects/insider_gnn/output/reports/soc_dashboard_data.json) & [`web/data/soc_data.json`](file:///Users/vivek/Projects/insider_gnn/web/data/soc_data.json)  
+> - 60-Day Optional: [`output/reports/soc_dashboard_data_60d.json`](file:///Users/vivek/Projects/insider_gnn/output/reports/soc_dashboard_data_60d.json) & [`web/data/soc_data_60d.json`](file:///Users/vivek/Projects/insider_gnn/web/data/soc_data_60d.json)  
 
 ---
 
@@ -20,21 +24,68 @@ venv/bin/python scripts/soc_server.py --port 8080
 ```
 Base URL: `http://localhost:8080`
 
+**Multi-Model Switching**: All REST endpoints accept an optional `?model=14d` (production default) or `?model=60d` (strategic multi-scale) query parameter.
+
 ### Option B: Direct Static JSON Import
 If you prefer building offline or bundling data directly into your frontend build, import:
-```
-output/reports/soc_dashboard_data.json (1.9 MB)
-```
-This file contains the complete pre-extracted dataset (top-50 alert dossiers, 21 full 501-day employee timelines, and benchmark metrics).
+- Default: `output/reports/soc_dashboard_data.json` or `web/data/soc_data.json` (14-day tactical model)
+- Optional: `output/reports/soc_dashboard_data_60d.json` or `web/data/soc_data_60d.json` (60-day strategic model)
 
 ---
 
 ## 2. REST API Endpoints Specification
 
-### 2.1 Overview & SOC KPIs
-- **Endpoint**: `GET /api/overview`
-- **Description**: High-level SOC telemetry, verification benchmarks, and scope summary.
+### 2.0 Available Models & Active Selection
+- **Endpoint**: `GET /api/models`
+- **Description**: Returns metadata and benchmark performance metrics for both models, enabling a clean model selector/toggle in the UI.
 - **Example Response**:
+```json
+{
+  "default_model": "14d",
+  "active_selection": "14d",
+  "models": [
+    {
+      "id": "14d",
+      "name": "Sequential Temporal GRU (14-Day)",
+      "type": "tactical_forensic_triage",
+      "is_default": true,
+      "window_size": 14,
+      "loss": "Binary Focal Loss (gamma=1.5, alpha=0.75)",
+      "pr_auc": 0.6735,
+      "roc_auc": 0.9947,
+      "multiplier_over_chance": 312.0,
+      "precision_at_10": 1.0,
+      "precision_at_20": 1.0,
+      "precision_at_50": 0.94,
+      "precision_at_100": 0.81,
+      "description": "Production default model. Optimal signal-to-noise ratio for fast attack escalation triage and acute incident detection."
+    },
+    {
+      "id": "60d",
+      "name": "Multi-Scale Hierarchical GRU (3d/14d/60d)",
+      "type": "strategic_insider_surveillance",
+      "is_default": false,
+      "window_sizes": [3, 14, 60],
+      "attention_gating": "Cross-Scale Softmax (71.0% tactical 14d, 20.6% burst 3d, 8.4% strategic 60d)",
+      "pr_auc": 0.5776,
+      "roc_auc": 0.9947,
+      "multiplier_over_chance": 267.6,
+      "precision_at_10": 0.90,
+      "precision_at_20": 0.80,
+      "precision_at_50": 0.78,
+      "precision_at_100": 0.68,
+      "description": "Optional model for strategic macro drift analysis, slow preparatory reconnaissance, and multi-tempo attack correlation."
+    }
+  ]
+}
+```
+
+---
+
+### 2.1 Overview & SOC KPIs
+- **Endpoint**: `GET /api/overview` (supports `?model=14d` or `?model=60d`)
+- **Description**: High-level SOC telemetry, verification benchmarks, and scope summary.
+- **Example Response (Default 14-Day Model)**:
 ```json
 {
   "kpi": {
@@ -42,18 +93,22 @@ This file contains the complete pre-extracted dataset (top-50 alert dossiers, 21
     "evaluation_days": 501,
     "test_users": 150,
     "test_instances_evaluated": 73200,
-    "temporal_pr_auc": 0.562,
-    "temporal_roc_auc": 0.9936,
-    "temporal_multiplier": 260.4,
+    "model_in_use": "14d_default",
+    "temporal_pr_auc": 0.6735,
+    "temporal_roc_auc": 0.9947,
+    "temporal_multiplier": 312.0,
     "precision_at_10": 100.0,
     "precision_at_20": 100.0,
-    "precision_at_50": 82.0,
+    "precision_at_50": 94.0,
     "false_positive_reduction": "6.5x vs Static CLF"
   },
   "metadata": {
-    "generated_at": "2026-10-14 06:59:02 UTC",
+    "generated_at": "2026-10-14 11:51:44 UTC",
     "dataset": "CMU CERT Insider Threat Testbed (r4.2)",
-    "pipeline": "Temporal Heterogeneous GNN + Attention GRU"
+    "pipeline": "Temporal Heterogeneous GNN + Attention GRU",
+    "model_id": "14d",
+    "model_name": "Sequential Temporal GRU (14-Day)",
+    "is_default": true
   }
 }
 ```
@@ -63,6 +118,7 @@ This file contains the complete pre-extracted dataset (top-50 alert dossiers, 21
 ### 2.2 Alerts Triage Queue
 - **Endpoint**: `GET /api/incidents`
 - **Query Parameters**:
+  - `model`: Model dataset (`14d` [default] or `60d`).
   - `severity`: Filter by `CRITICAL` (>=95%), `HIGH` (>=80%), `MEDIUM` (>=50%).
   - `scenario`: Filter by scenario ID (`1`, `2`, `3`).
   - `user`: Filter by CERT User ID (e.g., `CCL0068`).
@@ -236,15 +292,26 @@ This file contains the complete pre-extracted dataset (top-50 alert dossiers, 21
       "p100": 0.26
     },
     {
-      "name": "Sequential Temporal GRU",
+      "name": "Sequential Temporal GRU (14-Day Default)",
       "paradigm": "Temporal Attention (14-Day)",
-      "pr_auc": 0.5620,
-      "roc_auc": 0.9936,
-      "multiplier": 260.4,
+      "pr_auc": 0.6735,
+      "roc_auc": 0.9947,
+      "multiplier": 312.0,
       "p10": 1.0,
       "p20": 1.0,
-      "p50": 0.82,
-      "p100": 0.67
+      "p50": 0.94,
+      "p100": 0.81
+    },
+    {
+      "name": "Multi-Scale Temporal GRU (60-Day Optional)",
+      "paradigm": "Hierarchical Gated (3d/14d/60d)",
+      "pr_auc": 0.5776,
+      "roc_auc": 0.9947,
+      "multiplier": 267.6,
+      "p10": 0.90,
+      "p20": 0.80,
+      "p50": 0.78,
+      "p100": 0.68
     }
   ]
 }
@@ -261,8 +328,11 @@ This file contains the complete pre-extracted dataset (top-50 alert dossiers, 21
    - **Benign Baseline**: Terminal Emerald (`#00e599`, `#10b981`)
    - **Neutral / Backdrop**: Dark Slate / Carbon (`#070b14`, `#0d1424`)
 2. **Key Visual Components to Design**:
+   - **Model Selector Switch**: Toggle button group `[14-Day Tactical (Default) | 60-Day Strategic]` in the top header or filter bar. When toggled, query `?model=14d` vs `?model=60d` to switch the active detection lens seamlessly.
    - **Triage Queue**: Sortable, filterable alert feed with quick severity badges and threat vector tags.
    - **14-Day Attention Heatmap**: Sequential 14-cell timeline representing $T-13$ to $T-0$, highlighting when risk spiked.
+   - **Scale Attribution Meter** (for 60-day model): Multi-segment progress bar displaying learned attention share: **71.0%** (14d tactical), **20.6%** (3d burst), **8.4%** (60d macro drift).
    - **Relational Activity Attribution**: Horizontal stacked or grouped bar chart displaying which operations (USB vs. File Copy vs. URL) drove the alert.
    - **Dual-Stream Progression Chart**: Dual-line graph comparing single-day static risk (showing noisy spikes) vs. sequential temporal risk (showing clean, sustained attack escalation).
    - **Psychometric Radar / Gauges**: Visualization for Big Five (O, C, E, A, N) personality scores (scores range from 10 to 50).
+

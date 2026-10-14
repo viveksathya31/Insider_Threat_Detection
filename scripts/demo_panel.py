@@ -96,12 +96,26 @@ def main():
         ),
     ]
 
+    if "MultiScale_GRU" in temporal_res:
+        rows.append(
+            (
+                "Multi-Scale GRU (3d/14d/60d)",
+                "Hierarchical",
+                temporal_res["MultiScale_GRU"]["pr_auc"],
+                temporal_res["MultiScale_GRU"]["roc_auc"],
+                temporal_res["MultiScale_GRU"]["multiplier_over_chance"],
+                temporal_res["MultiScale_GRU"]["precision_at_k"].get("P@10", 0.0),
+                temporal_res["MultiScale_GRU"]["precision_at_k"].get("P@20", 0.0),
+                temporal_res["MultiScale_GRU"]["precision_at_k"].get("P@50", 0.0),
+            )
+        )
+
     for name, paradigm, pr, roc, mult, p10, p20, p50 in rows:
         p10_s = f"{p10 * 100:.1f}%"
         p20_s = f"{p20 * 100:.1f}%"
         p50_s = f"{p50 * 100:.1f}%"
-        print(f"{name:<25} | {paradigm:<14} | {pr:<8.4f} | {roc:<8.4f} | {mult:<10.1f}x | {p10_s:<7} | {p20_s:<7} | {p50_s:<7}")
-    print("=" * 86)
+        print(f"{name:<28} | {paradigm:<13} | {pr:<8.4f} | {roc:<8.4f} | {mult:<10.1f}x | {p10_s:<7} | {p20_s:<7} | {p50_s:<7}")
+    print("=" * 90)
 
     # 2. Forensic Case Study
     cache = torch.load(FEATURES_PATH, weights_only=False)

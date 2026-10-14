@@ -8,6 +8,7 @@ Usage:
     venv/bin/python scripts/export_soc_data.py
 """
 
+import argparse
 import json
 import sys
 import time
@@ -27,14 +28,21 @@ WEB_DATA_DIR = ROOT_DIR / "web" / "data"
 OUTPUT_REPORT_DIR = ROOT_DIR / "output" / "reports"
 
 
-def main():
+def export_model_dataset(model_choice: str = "14d"):
     start_time = time.time()
-    print("[export] Starting SOC dashboard data compilation...")
+    is_ms = model_choice in ["60d", "multiscale"]
+    ckpt_path = "output/checkpoints/temporal_multiscale_best.pt" if is_ms else "output/checkpoints/temporal_best.pt"
+    model_name_desc = "Multi-Scale 3d/14d/60d GRU (Strategic Optional)" if is_ms else "14-Day Production GRU (Tactical Default)"
+
+    print(f"\n[export] ======================================================================")
+    print(f"[export] Starting SOC dashboard data compilation using: {model_name_desc}")
+    print(f"[export] Checkpoint: {ckpt_path}")
+    print(f"[export] ======================================================================")
 
     WEB_DATA_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
-    parser = ExplainabilityParser()
+    parser = ExplainabilityParser(temporal_ckpt_path=ckpt_path)
 
     # Load evaluated benchmark reports
     with open(ROOT_DIR / "output/reports/model_comparison_report.json", "r") as f:
@@ -45,8 +53,6 @@ def main():
     # 1. Score all test users across days
     print("[export] Scoring test instances and ranking alerts...")
     test_indices = torch.where(parser.masks["test"])[0].tolist()
-    T = parser.features.shape[0]
-    W = parser.window_size
 
     scored_instances = []
     user_timelines = {}
@@ -81,7 +87,6 @@ def main():
         incidents.append(dossier)
 
     # 3. Identify Key Employees for Deep-Dive Explorer
-    # We include all confirmed malicious test actors + representative benign users across departments
     print("[export] Assembling employee catalog...")
     malicious_test_users = []
     for u in test_indices:
@@ -178,7 +183,7 @@ def main():
                 "p100": static_report["CLF"]["precision_at_k"].get("P@100", 0.0),
             },
             {
-                "name": "Sequential Temporal GRU",
+                "name": "Sequential Temporal GRU (14-Day Default)",
                 "paradigm": "Temporal Attention (14-Day)",
                 "pr_auc": temporal_report["Temporal_GRU"]["pr_auc"],
                 "roc_auc": temporal_report["Temporal_GRU"]["roc_auc"],
@@ -188,12 +193,44 @@ def main():
                 "p50": temporal_report["Temporal_GRU"]["precision_at_k"].get("P@50", 0.0),
                 "p100": temporal_report["Temporal_GRU"]["precision_at_k"].get("P@100", 0.0),
             },
-        ],
-        "kpi": {
+        ]
+    }
+
+    if "MultiScale_GRU" in temporal_report:
+        benchmarks["models"].append({
+            "name": "Multi-Scale Temporal GRU (60-Day Optional)",
+            "paradigm": "Hierarchical Gated (3d/14d/60d)",
+            "pr_auc": temporal_report["MultiScale_GRU"]["pr_auc"],
+            "roc_auc": temporal_report["MultiScale_GRU"]["roc_auc"],
+            "multiplier": temporal_report["MultiScale_GRU"]["multiplier_over_chance"],
+            "p10": temporal_report["MultiScale_GRU"]["precision_at_k"].get("P@10", 0.0),
+            "p20": temporal_report["MultiScale_GRU"]["precision_at_k"].get("P@20", 0.0),
+            "p50": temporal_report["MultiScale_GRU"]["precision_at_k"].get("P@50", 0.0),
+            "p100": temporal_report["MultiScale_GRU"]["precision_at_k"].get("P@100", 0.0),
+        })
+
+    if is_ms:
+        benchmarks["kpi"] = {
             "total_monitored_users": 1000,
             "evaluation_days": 501,
             "test_users": len(test_indices),
             "test_instances_evaluated": len(scored_instances),
+            "model_in_use": "60d_multiscale",
+            "temporal_pr_auc": round(temporal_report["MultiScale_GRU"]["pr_auc"], 4),
+            "temporal_roc_auc": round(temporal_report["MultiScale_GRU"]["roc_auc"], 4),
+            "temporal_multiplier": round(temporal_report["MultiScale_GRU"]["multiplier_over_chance"], 1),
+            "precision_at_10": round(temporal_report["MultiScale_GRU"]["precision_at_k"]["P@10"] * 100, 1),
+            "precision_at_20": round(temporal_report["MultiScale_GRU"]["precision_at_k"]["P@20"] * 100, 1),
+            "precision_at_50": round(temporal_report["MultiScale_GRU"]["precision_at_k"]["P@50"] * 100, 1),
+            "false_positive_reduction": "5.6x vs Static CLF",
+        }
+    else:
+        benchmarks["kpi"] = {
+            "total_monitored_users": 1000,
+            "evaluation_days": 501,
+            "test_users": len(test_indices),
+            "test_instances_evaluated": len(scored_instances),
+            "model_in_use": "14d_default",
             "temporal_pr_auc": round(temporal_report["Temporal_GRU"]["pr_auc"], 4),
             "temporal_roc_auc": round(temporal_report["Temporal_GRU"]["roc_auc"], 4),
             "temporal_multiplier": round(temporal_report["Temporal_GRU"]["multiplier_over_chance"], 1),
@@ -201,14 +238,16 @@ def main():
             "precision_at_20": round(temporal_report["Temporal_GRU"]["precision_at_k"]["P@20"] * 100, 1),
             "precision_at_50": round(temporal_report["Temporal_GRU"]["precision_at_k"]["P@50"] * 100, 1),
             "false_positive_reduction": "6.5x vs Static CLF",
-        },
-    }
+        }
 
     soc_payload = {
         "metadata": {
             "generated_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
             "dataset": "CMU CERT Insider Threat Testbed (r4.2)",
             "pipeline": "Temporal Heterogeneous GNN + Attention GRU",
+            "model_id": "60d" if is_ms else "14d",
+            "model_name": "Multi-Scale Hierarchical GRU (3d/14d/60d)" if is_ms else "Sequential Temporal GRU (14-Day)",
+            "is_default": not is_ms,
         },
         "kpi": benchmarks["kpi"],
         "benchmarks": benchmarks["models"],
@@ -216,19 +255,48 @@ def main():
         "users": user_catalog,
     }
 
-    # Write report file
-    rep_file = OUTPUT_REPORT_DIR / "soc_dashboard_data.json"
-    print(f"[export] Writing payload to {rep_file}...")
-    with open(rep_file, "w") as f:
-        json.dump(soc_payload, f, indent=2)
+    # Determine output destinations
+    targets = []
+    if is_ms:
+        targets.append(OUTPUT_REPORT_DIR / "soc_dashboard_data_60d.json")
+        if WEB_DATA_DIR.exists():
+            targets.append(WEB_DATA_DIR / "soc_data_60d.json")
+    else:
+        # Default files + explicit 14d files
+        targets.append(OUTPUT_REPORT_DIR / "soc_dashboard_data.json")
+        targets.append(OUTPUT_REPORT_DIR / "soc_dashboard_data_14d.json")
+        if WEB_DATA_DIR.exists():
+            targets.append(WEB_DATA_DIR / "soc_data.json")
+            targets.append(WEB_DATA_DIR / "soc_data_14d.json")
 
-    if WEB_DATA_DIR.exists():
-        web_file = WEB_DATA_DIR / "soc_data.json"
-        with open(web_file, "w") as f:
+    for tgt in targets:
+        print(f"[export] Writing payload to {tgt}...")
+        with open(tgt, "w") as f:
             json.dump(soc_payload, f, indent=2)
 
     elapsed = time.time() - start_time
     print(f"[export] SUCCESS: Generated {len(incidents)} alert dossiers and {len(user_catalog)} employee profiles in {elapsed:.2f}s.")
+    return soc_payload
+
+
+def main():
+    arg_parser = argparse.ArgumentParser(description="Export SOC Frontend Dashboard Dataset")
+    arg_parser.add_argument(
+        "--model",
+        type=str,
+        default="14d",
+        choices=["14d", "single", "60d", "multiscale", "all"],
+        help="Model to export: '14d' (production default), '60d' (strategic optional), or 'all' (compiles both)",
+    )
+    args = arg_parser.parse_args()
+
+    if args.model == "all":
+        print("[export] Running full export for both 14-day default and 60-day optional models...")
+        export_model_dataset("14d")
+        export_model_dataset("60d")
+        print("\n[export] All models successfully exported and synchronized.")
+    else:
+        export_model_dataset(args.model)
 
 
 if __name__ == "__main__":

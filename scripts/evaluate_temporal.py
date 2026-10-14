@@ -28,11 +28,12 @@ import torch
 from torch.utils.data import DataLoader
 from sklearn.metrics import average_precision_score, roc_auc_score
 
-from models import TemporalGRU, load_user_split_masks
-from scripts.train_temporal import RollingWindowDataset
+from models import TemporalGRU, MultiScaleTemporalGRU, load_user_split_masks
+from scripts.train_temporal import RollingWindowDataset, MultiScaleWindowDataset
 
 FEATURES_PATH = Path("output/temporal_features.pt")
 CHECKPOINT_PATH = Path("output/checkpoints/temporal_best.pt")
+MULTISCALE_CHECKPOINT_PATH = Path("output/checkpoints/temporal_multiscale_best.pt")
 REPORT_PATH = Path("output/reports/temporal_evaluation_report.json")
 
 
@@ -123,12 +124,41 @@ def main():
 
     print(f"[eval_temporal] Scored {total_test:,} instances in {eval_time:.1f}s. Positives: {malicious_count} ({chance_baseline * 100:.3f}%)", flush=True)
 
-    # Metrics computation
     models_evaluated = {
         "Temporal_GRU": temporal_scores,
-        "Static_CLF": static_clf_scores,
-        "Static_AE": static_ae_scores,
     }
+
+    # 4. Multi-Scale Model Evaluation (if checkpoint exists)
+    if MULTISCALE_CHECKPOINT_PATH.exists():
+        print(f"[eval_temporal] Loading Multi-Scale checkpoint from {MULTISCALE_CHECKPOINT_PATH} ...", flush=True)
+        ms_ckpt = torch.load(MULTISCALE_CHECKPOINT_PATH, map_location=device, weights_only=False)
+        ms_model = MultiScaleTemporalGRU(
+            input_dim=ms_ckpt["input_dim"],
+            hidden_dim=ms_ckpt["hidden_dim"],
+            num_layers=ms_ckpt["num_layers"],
+            dropout=ms_ckpt["dropout"],
+        ).to(device)
+        ms_model.load_state_dict(ms_ckpt["model_state_dict"])
+        ms_model.eval()
+
+        ms_test_ds = MultiScaleWindowDataset(features, labels, test_indices, max_window=60, min_window=14)
+        ms_test_loader = DataLoader(ms_test_ds, batch_size=512, shuffle=False)
+
+        ms_probs = []
+        ms_scale_weights = []
+        for x_60, mask_60, _ in ms_test_loader:
+            x_60, mask_60 = x_60.to(device), mask_60.to(device)
+            p, sw, _ = ms_model.predict_risk(x_60, mask_60=mask_60)
+            ms_probs.append(p.cpu().numpy())
+            ms_scale_weights.append(sw.cpu().numpy())
+
+        ms_scores = np.concatenate(ms_probs)
+        models_evaluated["MultiScale_GRU"] = ms_scores
+        avg_scales = np.concatenate(ms_scale_weights).mean(axis=0)
+        print(f"[eval_temporal] Multi-Scale Attention Balance (3d / 14d / 60d): {avg_scales[0]*100:.1f}% / {avg_scales[1]*100:.1f}% / {avg_scales[2]*100:.1f}%", flush=True)
+
+    models_evaluated["Static_CLF"] = static_clf_scores
+    models_evaluated["Static_AE"] = static_ae_scores
 
     results = {}
     k_vals = [10, 20, 50, 100, 200]

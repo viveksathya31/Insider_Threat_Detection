@@ -25,7 +25,7 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import average_precision_score, roc_auc_score
 
-from models import TemporalGRU, load_user_split_masks
+from models import TemporalGRU, MultiScaleTemporalGRU, load_user_split_masks, BinaryFocalLoss
 
 FEATURES_PATH = Path("output/temporal_features.pt")
 CHECKPOINT_DIR = Path("output/checkpoints")
@@ -61,7 +61,6 @@ class RollingWindowDataset(Dataset):
         self.window_size = window_size
         self.T, self.N_users, self.D = features.shape
 
-        # Build list of (day_t, user_idx) for valid days t >= window_size - 1
         samples = []
         user_list = user_indices.tolist()
         for t in range(window_size - 1, self.T):
@@ -79,10 +78,55 @@ class RollingWindowDataset(Dataset):
         return x, y
 
 
-def compute_pos_weight(dataset: RollingWindowDataset) -> float:
+class MultiScaleWindowDataset(Dataset):
+    """
+    Multi-Scale causal dataset providing 60-day historical windows with left-padding
+    and boolean valid-day masking for early calendar days (days 13 to 59).
+    """
+
+    def __init__(self, features: torch.Tensor, labels: torch.Tensor,
+                 user_indices: torch.Tensor, max_window: int = 60, min_window: int = 14):
+        self.features = features
+        self.labels = labels
+        self.max_window = max_window
+        self.min_window = min_window
+        self.T, self.N_users, self.D = features.shape
+
+        samples = []
+        user_list = user_indices.tolist()
+        for t in range(min_window - 1, self.T):
+            for u in user_list:
+                samples.append((t, u))
+        self.samples = samples
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int):
+        t, u = self.samples[idx]
+        start_t = max(0, t - self.max_window + 1)
+        actual_seq = self.features[start_t : t + 1, u, :]  # [L, D]
+        actual_len = actual_seq.shape[0]
+
+        if actual_len < self.max_window:
+            pad_len = self.max_window - actual_len
+            pad = torch.zeros(pad_len, self.D, dtype=actual_seq.dtype)
+            x_60 = torch.cat([pad, actual_seq], dim=0)  # [60, D]
+            mask_60 = torch.cat([
+                torch.zeros(pad_len, dtype=torch.bool),
+                torch.ones(actual_len, dtype=torch.bool),
+            ], dim=0)
+        else:
+            x_60 = actual_seq
+            mask_60 = torch.ones(self.max_window, dtype=torch.bool)
+
+        y = self.labels[t, u]
+        return x_60, mask_60, y
+
+
+def compute_pos_weight(dataset: Dataset) -> float:
     pos_count = 0
     total_count = len(dataset)
-    # Fast vectorized calculation
     for t, u in dataset.samples:
         if dataset.labels[t, u] > 0.5:
             pos_count += 1
@@ -97,14 +141,20 @@ def train_one_epoch(model: nn.Module, loader: DataLoader, optimizer: torch.optim
     model.train()
     total_loss = 0.0
 
-    for x, y in loader:
-        x = x.to(device)
-        y = y.to(device).float()
-
+    for batch in loader:
         optimizer.zero_grad()
-        logits, _ = model(x)
-        loss = criterion(logits, y)
+        if len(batch) == 3:
+            x, mask, y = batch
+            x, mask, y = x.to(device), mask.to(device), y.to(device).float()
+            out = model(x, mask_60=mask) if hasattr(model, "gru_60d") else model(x)
+            logits = out[0] if isinstance(out, tuple) else out
+        else:
+            x, y = batch
+            x, y = x.to(device), y.to(device).float()
+            out = model(x)
+            logits = out[0] if isinstance(out, tuple) else out
 
+        loss = criterion(logits, y)
         loss.backward()
         if grad_clip > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
@@ -120,9 +170,18 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> tupl
     model.eval()
     all_probs, all_labels = [], []
 
-    for x, y in loader:
-        x = x.to(device)
-        logits, _ = model(x)
+    for batch in loader:
+        if len(batch) == 3:
+            x, mask, y = batch
+            x, mask = x.to(device), mask.to(device)
+            out = model(x, mask_60=mask) if hasattr(model, "gru_60d") else model(x)
+            logits = out[0] if isinstance(out, tuple) else out
+        else:
+            x, y = batch
+            x = x.to(device)
+            out = model(x)
+            logits = out[0] if isinstance(out, tuple) else out
+
         probs = torch.sigmoid(logits).cpu().numpy()
         labels = y.numpy()
 
@@ -143,15 +202,19 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> tupl
 
 def main():
     parser = argparse.ArgumentParser(description="Train Temporal GRU Model for Insider Threat Detection")
-    parser.add_argument("--epochs", type=int, default=10, help="Number of epochs")
-    parser.add_argument("--window_size", type=int, default=14, help="Rolling window size in days")
+    parser.add_argument("--model", type=str, default="14d", choices=["14d", "single", "60d", "multiscale"], help="Architecture: '14d' / 'single' (14-day production default) or '60d' / 'multiscale' (hierarchical 3d/14d/60d)")
+    parser.add_argument("--epochs", type=int, default=15, help="Number of epochs")
+    parser.add_argument("--window_size", type=int, default=14, help="Rolling window size in days (for single model)")
     parser.add_argument("--batch_size", type=int, default=512, help="Batch size")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--hidden_dim", type=int, default=64, help="GRU hidden dimension")
     parser.add_argument("--num_layers", type=int, default=2, help="Number of GRU layers")
     parser.add_argument("--dropout", type=float, default=0.2, help="Dropout rate")
-    parser.add_argument("--patience", type=int, default=4, help="Early stopping patience")
+    parser.add_argument("--patience", type=int, default=5, help="Early stopping patience")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--loss", type=str, default="focal", choices=["focal", "bce"], help="Loss function (focal or bce)")
+    parser.add_argument("--gamma", type=float, default=1.5, help="Focal loss gamma parameter")
+    parser.add_argument("--alpha", type=float, default=0.75, help="Focal loss alpha weighting")
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -171,31 +234,53 @@ def main():
     train_indices = torch.where(masks["train"])[0]
     val_indices = torch.where(masks["val"])[0]
 
-    train_dataset = RollingWindowDataset(features, labels, train_indices, window_size=args.window_size)
-    val_dataset = RollingWindowDataset(features, labels, val_indices, window_size=args.window_size)
+    is_multiscale = args.model in ["multiscale", "60d"]
+
+    if is_multiscale:
+        print("[train_temporal] Initializing MultiScaleWindowDataset (3d / 14d / 60d horizons with causal left-padding)...", flush=True)
+        train_dataset = MultiScaleWindowDataset(features, labels, train_indices, max_window=60, min_window=14)
+        val_dataset = MultiScaleWindowDataset(features, labels, val_indices, max_window=60, min_window=14)
+    else:
+        print(f"[train_temporal] Initializing RollingWindowDataset (Production default {args.window_size}-day window)...", flush=True)
+        train_dataset = RollingWindowDataset(features, labels, train_indices, window_size=args.window_size)
+        val_dataset = RollingWindowDataset(features, labels, val_indices, window_size=args.window_size)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
 
-    pos_weight = compute_pos_weight(train_dataset)
-    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight], device=device))
+    if args.loss == "focal":
+        print(f"[train_temporal] Using BinaryFocalLoss (gamma={args.gamma}, alpha={args.alpha}) for hard boundary optimization", flush=True)
+        criterion = BinaryFocalLoss(gamma=args.gamma, alpha=args.alpha)
+    else:
+        pos_weight = compute_pos_weight(train_dataset)
+        criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight], device=device))
 
     # 3. Model Architecture
-    model = TemporalGRU(
-        input_dim=input_dim,
-        hidden_dim=args.hidden_dim,
-        num_layers=args.num_layers,
-        dropout=args.dropout,
-    ).to(device)
+    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    if is_multiscale:
+        model = MultiScaleTemporalGRU(
+            input_dim=input_dim,
+            hidden_dim=args.hidden_dim,
+            num_layers=args.num_layers,
+            dropout=args.dropout,
+        ).to(device)
+        best_checkpoint_path = CHECKPOINT_DIR / "temporal_multiscale_best.pt"
+        desc = "Multi-Scale Hierarchical GRU (3d / 14d / 60d)"
+    else:
+        model = TemporalGRU(
+            input_dim=input_dim,
+            hidden_dim=args.hidden_dim,
+            num_layers=args.num_layers,
+            dropout=args.dropout,
+        ).to(device)
+        best_checkpoint_path = CHECKPOINT_DIR / "temporal_best.pt"
+        desc = f"Single-Scale Temporal GRU ({args.window_size}-Day Production Default)"
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", factor=0.5, patience=2)
 
-    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-    best_checkpoint_path = CHECKPOINT_DIR / "temporal_best.pt"
-
     print("\n" + "=" * 70, flush=True)
-    print(f" Starting Temporal GRU Training ({args.epochs} Epochs | Window: {args.window_size} days)", flush=True)
+    print(f" Starting {desc} Training ({args.epochs} Epochs)", flush=True)
     print("=" * 70, flush=True)
 
     best_val_pr_auc = -1.0
@@ -222,12 +307,13 @@ def main():
             patience_counter = 0
             torch.save({
                 "epoch": epoch,
+                "model_type": args.model,
                 "model_state_dict": model.state_dict(),
                 "input_dim": input_dim,
                 "hidden_dim": args.hidden_dim,
                 "num_layers": args.num_layers,
                 "dropout": args.dropout,
-                "window_size": args.window_size,
+                "window_size": 60 if args.model == "multiscale" else args.window_size,
                 "best_val_pr_auc": best_val_pr_auc,
             }, best_checkpoint_path)
             print(f"  --> Saved new best checkpoint (Val PR-AUC: {val_pr_auc:.4f}) to {best_checkpoint_path}", flush=True)
