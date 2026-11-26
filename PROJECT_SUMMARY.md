@@ -226,10 +226,4 @@ python scripts/evaluate_temporal.py
 # 8. Launch terminal demonstration panel
 python scripts/demo_panel.py
 
-# 9. Compile SOC Dataset & launch Headless REST API Server for UI/Designers
-python scripts/export_soc_data.py
-python scripts/soc_server.py --port 8080
-# API discovery endpoint: http://localhost:8080/ (See docs/DESIGNER_INTEGRATION_GUIDE.md)
-```
-
 
